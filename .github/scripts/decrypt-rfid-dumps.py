@@ -417,6 +417,11 @@ def main():
         
         if not missing_files:
             print("✅ All dump files have corresponding decrypted JSON files!")
+            print(f"\n📊 Decryption Summary:")
+            print(f"✅ Successfully decrypted: 0")
+            print(f"❌ Failed: 0")
+            print(f"📁 Total processed: 0")
+            print(f"\n🎉 All decrypted JSON files are up to date!")
             return
         
         if args.dry_run:

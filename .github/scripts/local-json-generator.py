@@ -232,6 +232,11 @@ def main():
         
         if not missing_files:
             print("✅ All .bin files have corresponding .json files!")
+            print(f"\n📊 Generation Summary:")
+            print(f"✅ Successfully generated: 0")
+            print(f"❌ Failed: 0")
+            print(f"📁 Total processed: 0")
+            print(f"\n🎉 All JSON files are up to date!")
             return
         
         if args.dry_run:

@@ -123,6 +123,11 @@ def main():
         
         if not missing_files:
             print("✅ All key.bin files have corresponding .dic files!")
+            print(f"\n📊 Conversion Summary:")
+            print(f"✅ Successfully converted: 0")
+            print(f"❌ Failed: 0")
+            print(f"📁 Total processed: 0")
+            print(f"\n🎉 All .dic files are up to date!")
             return
         
         if args.dry_run:
