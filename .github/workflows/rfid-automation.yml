@@ -475,9 +475,9 @@ jobs:
               
               // Apply comprehensive labels
               const labels = ['rfid', 'automation'];
-              if (jsonGenerated > 0) labels.push('json-generation');
-              if (dicGenerated > 0) labels.push('cryptography');
-              if (decryptGenerated > 0) labels.push('decryption');
+              if (jsonFiles > 0) labels.push('json-generation');
+              if (dicFiles > 0) labels.push('cryptography');
+              if (decryptedFiles > 0) labels.push('decryption');
               
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
