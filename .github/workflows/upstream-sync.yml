@@ -1,0 +1,374 @@
+name: Upstream Synchronization
+
+on:
+  # Run weekly on Sundays at 03:00 UTC 
+  schedule:
+    - cron: '0 3 * * 0'
+  
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force create new sync branch (even if no changes)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      target_branch:
+        description: 'Target branch for PR (default: main)'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-upstream:
+    name: Check Upstream Repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      has_changes: ${{ steps.check-changes.outputs.has_changes }}
+      upstream_commits: ${{ steps.check-changes.outputs.upstream_commits }}
+      changes_summary: ${{ steps.check-changes.outputs.changes_summary }}
+      last_sync_commit: ${{ steps.check-changes.outputs.last_sync_commit }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Add upstream remote
+        run: |
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/queengooborg/Bambu-Lab-RFID-Library.git
+          git fetch upstream main
+      
+      - name: Check for upstream changes
+        id: check-changes
+        run: |
+          # Get the last sync commit message pattern
+          LAST_SYNC=$(git log --oneline --grep="sync: upstream changes from queengooborg/Bambu-Lab-RFID-Library" -1 --format="%H" || echo "")
+          
+          if [ -z "$LAST_SYNC" ]; then
+            # No previous sync found, compare with initial commit
+            LAST_SYNC=$(git log --oneline --format="%H" | tail -1)
+            echo "No previous sync found, using initial commit: $LAST_SYNC"
+          else
+            echo "Last sync commit: $LAST_SYNC"
+          fi
+          
+          echo "last_sync_commit=$LAST_SYNC" >> $GITHUB_OUTPUT
+          
+          # Count commits between our last sync and upstream main
+          UPSTREAM_COMMITS=$(git rev-list --count $LAST_SYNC..upstream/main 2>/dev/null || echo "0")
+          echo "upstream_commits=$UPSTREAM_COMMITS" >> $GITHUB_OUTPUT
+          
+          if [ "$UPSTREAM_COMMITS" -gt "0" ] || [ "${{ github.event.inputs.force_sync }}" == "true" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            
+            # Generate summary of upstream changes
+            echo "## Upstream Changes Summary" > changes_summary.md
+            echo "" >> changes_summary.md
+            echo "**Commits to sync**: $UPSTREAM_COMMITS" >> changes_summary.md
+            echo "" >> changes_summary.md
+            
+            if [ "$UPSTREAM_COMMITS" -gt "0" ]; then
+              echo "### Recent commits from upstream:" >> changes_summary.md
+              git log --oneline --format="- %s (%an)" $LAST_SYNC..upstream/main | head -20 >> changes_summary.md
+            fi
+            
+            CHANGES_SUMMARY=$(cat changes_summary.md | tr '\n' '\r' | tr '\r' '\\n')
+            echo "changes_summary=$CHANGES_SUMMARY" >> $GITHUB_OUTPUT
+            
+            echo "Found $UPSTREAM_COMMITS new commits from upstream"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No new changes from upstream"
+          fi
+
+  sync-upstream:
+    name: Sync Upstream Changes
+    runs-on: ubuntu-latest
+    needs: check-upstream
+    if: needs.check-upstream.outputs.has_changes == 'true'
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Add upstream remote and fetch
+        run: |
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/queengooborg/Bambu-Lab-RFID-Library.git
+          git fetch upstream main
+      
+      - name: Create sync branch
+        id: create-branch
+        run: |
+          BRANCH_NAME="sync/upstream-$(date +%Y%m%d-%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          
+          # Create new branch from current main/target branch
+          TARGET_BRANCH="${{ github.event.inputs.target_branch || 'main' }}"
+          git checkout -b "$BRANCH_NAME" origin/$TARGET_BRANCH
+          
+          echo "Created sync branch: $BRANCH_NAME from $TARGET_BRANCH"
+      
+      - name: Attempt automatic merge
+        id: auto-merge
+        continue-on-error: true
+        run: |
+          echo "Attempting to merge upstream/main..."
+          
+          # Try to merge upstream changes
+          if git merge upstream/main --no-edit -m "sync: upstream changes from queengooborg/Bambu-Lab-RFID-Library
+
+          Automatic sync of upstream changes from the original repository.
+          
+          Upstream commits: ${{ needs.check-upstream.outputs.upstream_commits }}
+          
+          ${{ needs.check-upstream.outputs.changes_summary }}"; then
+            echo "merge_status=success" >> $GITHUB_OUTPUT
+            echo "merge_conflicts=false" >> $GITHUB_OUTPUT
+            echo "Automatic merge successful"
+          else
+            echo "merge_status=conflicts" >> $GITHUB_OUTPUT  
+            echo "merge_conflicts=true" >> $GITHUB_OUTPUT
+            echo "Merge conflicts detected"
+            
+            # Show conflict details
+            echo "Conflicted files:"
+            git status --porcelain | grep "^UU\|^AA\|^DD\|^AU\|^UA\|^DU\|^UD" || true
+          fi
+      
+      - name: Handle merge conflicts (abort and create manual PR)
+        if: steps.auto-merge.outputs.merge_conflicts == 'true'
+        id: handle-conflicts
+        run: |
+          # Abort the conflicted merge
+          git merge --abort
+          
+          # Create a conflict resolution message
+          echo "conflict_message=Merge conflicts detected between our repository and upstream. Manual resolution required." >> $GITHUB_OUTPUT
+          echo "needs_manual_resolution=true" >> $GITHUB_OUTPUT
+          
+          # Show differences for manual resolution
+          echo "## Conflict Analysis" > conflict_analysis.md
+          echo "The following files have conflicts that need manual resolution:" >> conflict_analysis.md
+          echo "" >> conflict_analysis.md
+          
+          # Compare our branch with upstream
+          git diff --name-only origin/${{ github.event.inputs.target_branch || 'main' }} upstream/main >> conflict_analysis.md || true
+          
+          CONFLICT_INFO=$(cat conflict_analysis.md | tr '\n' '\r' | tr '\r' '\\n')
+          echo "conflict_details=$CONFLICT_INFO" >> $GITHUB_OUTPUT
+      
+      - name: Push successful merge branch
+        if: steps.auto-merge.outputs.merge_status == 'success'
+        run: |
+          git push origin "${{ steps.create-branch.outputs.branch_name }}"
+          echo "Pushed successful merge to branch: ${{ steps.create-branch.outputs.branch_name }}"
+      
+      - name: Push conflict branch for manual resolution
+        if: steps.auto-merge.outputs.merge_conflicts == 'true'
+        run: |
+          # Create an informational commit about conflicts
+          touch UPSTREAM_SYNC_CONFLICTS.md
+          echo "# Upstream Sync Conflicts" > UPSTREAM_SYNC_CONFLICTS.md
+          echo "" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "This branch was created to sync upstream changes but encountered merge conflicts." >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "Manual resolution is required." >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "**Upstream repository**: https://github.com/queengooborg/Bambu-Lab-RFID-Library" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "**Commits to sync**: ${{ needs.check-upstream.outputs.upstream_commits }}" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "## Resolution Steps" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "1. \`git merge upstream/main\`" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "2. Resolve conflicts in the affected files" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "3. \`git add <resolved-files>\`" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "4. \`git commit\`" >> UPSTREAM_SYNC_CONFLICTS.md
+          echo "5. Delete this file and push" >> UPSTREAM_SYNC_CONFLICTS.md
+          
+          git add UPSTREAM_SYNC_CONFLICTS.md
+          git commit -m "info: upstream sync requires manual conflict resolution
+
+          Attempted automatic sync from queengooborg/Bambu-Lab-RFID-Library
+          but encountered merge conflicts that require manual resolution.
+          
+          See UPSTREAM_SYNC_CONFLICTS.md for resolution instructions."
+          
+          git push origin "${{ steps.create-branch.outputs.branch_name }}"
+          echo "Pushed conflict resolution branch: ${{ steps.create-branch.outputs.branch_name }}"
+      
+      - name: Create or update Pull Request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branchName = "${{ steps.create-branch.outputs.branch_name }}";
+            const upstreamCommits = "${{ needs.check-upstream.outputs.upstream_commits }}";
+            const hasConflicts = "${{ steps.auto-merge.outputs.merge_conflicts }}" === "true";
+            const targetBranch = "${{ github.event.inputs.target_branch || 'main' }}";
+            
+            // Check if there's already an open upstream sync PR
+            const existingPRs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${branchName}`,
+              base: targetBranch
+            });
+            
+            let prTitle, prBody;
+            
+            if (hasConflicts) {
+              prTitle = `🔄 Upstream sync: ${upstreamCommits} commits (⚠️ conflicts require resolution)`;
+              prBody = [
+                '## ⚠️ Upstream Sync with Conflicts',
+                '',
+                '**This PR contains merge conflicts that require manual resolution.**',
+                '',
+                '### Summary',
+                `- **Upstream repository**: https://github.com/queengooborg/Bambu-Lab-RFID-Library`,
+                `- **Commits to sync**: ${upstreamCommits} new commits`,
+                `- **Status**: ❌ Automatic merge failed due to conflicts`,
+                '',
+                '### Manual Resolution Required',
+                '1. Check out this branch locally',
+                '2. Run `git merge upstream/main`', 
+                '3. Resolve merge conflicts in affected files',
+                '4. Complete merge with `git add <files>` and `git commit`',
+                '5. Delete `UPSTREAM_SYNC_CONFLICTS.md` and push',
+                '',
+                '### Upstream Changes',
+                '${{ needs.check-upstream.outputs.changes_summary }}',
+                '',
+                '---',
+                '🤖 This PR was automatically created by the upstream sync workflow.',
+                '**⚠️ Do not merge until conflicts are resolved!**'
+              ].join('\\n');
+            } else {
+              prTitle = `🔄 Upstream sync: ${upstreamCommits} commits from queengooborg/Bambu-Lab-RFID-Library`;
+              prBody = [
+                '## 🔄 Automated Upstream Synchronization',
+                '',
+                'This PR automatically syncs changes from the original upstream repository.',
+                '',
+                '### Summary',
+                `- **Upstream repository**: https://github.com/queengooborg/Bambu-Lab-RFID-Library`,
+                `- **Commits synchronized**: ${upstreamCommits} new commits`,
+                `- **Status**: ✅ Automatic merge successful`,
+                '',
+                '### Upstream Changes',
+                '${{ needs.check-upstream.outputs.changes_summary }}',
+                '',
+                '### Integration',
+                '- ✅ No merge conflicts detected',
+                '- ✅ All upstream changes preserved', 
+                '- ✅ Ready for review and merge',
+                '',
+                '---',
+                '🤖 This PR was automatically created by the upstream sync workflow.',
+                '**Ready for review and merge.**'
+              ].join('\\n');
+            }
+            
+            // Check for existing sync PR to update instead of creating new one
+            const syncPRs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              base: targetBranch
+            });
+            
+            const existingSyncPR = syncPRs.data.find(pr => 
+              pr.title.includes('Upstream sync:') || 
+              pr.head.ref.startsWith('sync/upstream-')
+            );
+            
+            if (existingSyncPR && !hasConflicts) {
+              // Update existing PR
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: existingSyncPR.number,
+                title: prTitle,
+                body: prBody
+              });
+              
+              console.log(`Updated existing PR #${existingSyncPR.number}: ${existingSyncPR.html_url}`);
+            } else {
+              // Create new PR
+              const { data: pullRequest } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: prTitle,
+                head: branchName,
+                base: targetBranch,
+                body: prBody,
+                draft: hasConflicts
+              });
+              
+              console.log('Created PR #' + pullRequest.number + ': ' + pullRequest.html_url);
+              
+              // Add appropriate labels
+              const labels = ['upstream-sync', 'automation'];
+              if (hasConflicts) {
+                labels.push('conflicts', 'needs-manual-resolution');
+              } else {
+                labels.push('ready-for-review');
+              }
+              
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: labels
+              });
+            }
+
+  summary:
+    name: Upstream Sync Summary  
+    runs-on: ubuntu-latest
+    needs: [check-upstream, sync-upstream]
+    if: always()
+    
+    steps:
+      - name: Report Summary
+        run: |
+          echo "## 🔄 Upstream Synchronization Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.check-upstream.outputs.has_changes }}" == "true" ]; then
+            echo "### 📥 Upstream Changes Detected" >> $GITHUB_STEP_SUMMARY
+            echo "- **Repository**: https://github.com/queengooborg/Bambu-Lab-RFID-Library" >> $GITHUB_STEP_SUMMARY
+            echo "- **New commits**: ${{ needs.check-upstream.outputs.upstream_commits }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Sync status**: ${{ needs.sync-upstream.result }}" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ needs.sync-upstream.result }}" == "success" ]; then
+              echo "- **Result**: ✅ Successfully created sync PR" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **Result**: ❌ Sync job failed" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "### ✅ Repository Up to Date" >> $GITHUB_STEP_SUMMARY
+            echo "No new changes detected from upstream repository." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Next Sync: Weekly on Sundays at 03:00 UTC" >> $GITHUB_STEP_SUMMARY
