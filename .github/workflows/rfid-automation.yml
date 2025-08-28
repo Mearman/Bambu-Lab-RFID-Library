@@ -147,7 +147,10 @@ jobs:
         continue-on-error: true
         run: |
           echo "Generating JSON files from RFID dumps..."
-          python3 .github/scripts/local-json-generator.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} 2>&1 | tee json_generation.log
+          python3 .github/scripts/local-json-generator.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > json_generation.log 2>&1
+          
+          # Ensure log file is fully written
+          sleep 1
           
           # Extract success metrics from output
           JSON_GENERATED=$(grep "Successfully generated:" json_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
@@ -157,6 +160,11 @@ jobs:
           echo "generated_count=$JSON_GENERATED" >> $GITHUB_OUTPUT
           echo "json_failed=$JSON_FAILED" >> $GITHUB_OUTPUT
           echo "json_success_rate=$SUCCESS_RATE" >> $GITHUB_OUTPUT
+          
+          echo "Metrics extracted:"
+          echo "  Generated: $JSON_GENERATED"
+          echo "  Failed: $JSON_FAILED" 
+          echo "  Success Rate: $SUCCESS_RATE"
           echo "Generated $JSON_GENERATED JSON files (${JSON_FAILED} failed, ${SUCCESS_RATE} success rate)"
       
       - name: Check for changes
@@ -354,7 +362,10 @@ jobs:
         continue-on-error: true
         run: |
           echo "Converting key.bin files to .dic format..."
-          python3 .github/scripts/key-to-dic-converter.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} 2>&1 | tee dic_generation.log
+          python3 .github/scripts/key-to-dic-converter.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > dic_generation.log 2>&1
+          
+          # Ensure log file is fully written
+          sleep 1
           
           # Extract success metrics from output
           DIC_GENERATED=$(grep "Successfully converted:" dic_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
@@ -364,6 +375,11 @@ jobs:
           echo "generated_count=$DIC_GENERATED" >> $GITHUB_OUTPUT
           echo "dic_failed=$DIC_FAILED" >> $GITHUB_OUTPUT
           echo "dic_success_rate=$SUCCESS_RATE" >> $GITHUB_OUTPUT
+          
+          echo "Metrics extracted:"
+          echo "  Generated: $DIC_GENERATED"
+          echo "  Failed: $DIC_FAILED"
+          echo "  Success Rate: $SUCCESS_RATE"
           echo "Generated $DIC_GENERATED dictionary files (${DIC_FAILED} failed, ${SUCCESS_RATE} success rate)"
       
       - name: Check for changes
@@ -459,7 +475,10 @@ jobs:
         continue-on-error: true
         run: |
           echo "Decrypt RFID dumps and generate JSON files directly..."
-          python3 .github/scripts/decrypt-rfid-dumps.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} 2>&1 | tee decrypt_generation.log
+          python3 .github/scripts/decrypt-rfid-dumps.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > decrypt_generation.log 2>&1
+          
+          # Ensure log file is fully written
+          sleep 1
           
           # Extract success metrics from output
           DECRYPT_GENERATED=$(grep "Successfully decrypted:" decrypt_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
@@ -469,6 +488,11 @@ jobs:
           echo "json_generated=$DECRYPT_GENERATED" >> $GITHUB_OUTPUT
           echo "decrypt_failed=$DECRYPT_FAILED" >> $GITHUB_OUTPUT
           echo "decrypt_success_rate=$SUCCESS_RATE" >> $GITHUB_OUTPUT
+          
+          echo "Metrics extracted:"
+          echo "  Generated: $DECRYPT_GENERATED"
+          echo "  Failed: $DECRYPT_FAILED"
+          echo "  Success Rate: $SUCCESS_RATE"
           echo "Generated $DECRYPT_GENERATED decrypted JSON files (${DECRYPT_FAILED} failed, ${SUCCESS_RATE} success rate)"
       
       - name: Check for changes
