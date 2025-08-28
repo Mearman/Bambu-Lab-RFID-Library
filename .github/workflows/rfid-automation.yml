@@ -368,31 +368,14 @@ jobs:
             const title = `Auto-generate ${titleParts.join(', ')} RFID files`;
             
             const prBody = [
-              '## 🤖 Automated RFID File Processing',
+              '## 🤖 Automated RFID File Generation',
               '',
-              'This PR automatically generates missing files for RFID data processing.',
-              '',
-              '### Latest Update Summary',
               ...summaryParts,
-              `- **Total Files Added**: ${addedCount} files`,
-              `- **Last Updated**: ${new Date().toISOString()}`,
-              '',
-              '### Processing Pipeline',
-              '1. 🔍 Scanned RFID library for missing files',
-              '2. 📋 Generated JSON files from .bin dumps using parse.py',
-              '3. 🔑 Created dictionary files from key.bin files for Proxmark3',
-              '4. 🔓 Decrypted dumps and generated comprehensive JSON metadata',
-              '5. ✅ Applied proper format conversion and validation',
-              '',
-              '### Generated Files Include',
-              '- **JSON Files**: Material identification, temperature profiles, physical properties',
-              '- **Dictionary Files**: Hex-formatted cryptographic keys for RFID tools',
-              '- **Decrypted Files**: Complete filament metadata from decrypted dumps',
-              '- **Metadata**: Production dates, tray UIDs, RFID technical data',
+              `- **Total Files Added**: ${addedCount}`,
               '',
               '---',
               '',
-              isUpdate ? '🤖 This PR was automatically updated by the RFID automation workflow.' : '🤖 This PR was automatically created by the RFID automation workflow.'
+              isUpdate ? '🤖 Automatically updated by GitHub Actions.' : '🤖 Automatically created by GitHub Actions.'
             ].join('\n');
             
             if (isUpdate && existingPRNumber) {
