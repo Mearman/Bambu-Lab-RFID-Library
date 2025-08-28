@@ -285,10 +285,11 @@ jobs:
           IS_UPDATE="${{ steps.handle-branch.outputs.is_update }}"
           
           if [ "$IS_UPDATE" = "true" ]; then
-            # Switch to existing branch and pull latest
+            # Switch to existing branch, handling conflicts by resetting
             git fetch origin
             git checkout "$BRANCH_NAME" || git checkout -b "$BRANCH_NAME"
-            git pull origin "$BRANCH_NAME" || true
+            # Force sync with remote branch, discarding local changes
+            git reset --hard "origin/$BRANCH_NAME" || true
           else
             # Create new branch
             git checkout -b "$BRANCH_NAME"
