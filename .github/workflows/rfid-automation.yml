@@ -341,8 +341,9 @@ jobs:
             const jsonGenerated = parseInt("${{ steps.generate-json.outputs.generated_count }}") || 0;
             const dicGenerated = parseInt("${{ steps.generate-dic.outputs.generated_count }}") || 0;
             const decryptGenerated = parseInt("${{ steps.generate-decrypted.outputs.json_generated }}") || 0;
-            const addedCount = "${{ steps.commit-changes.outputs.added_count }}";
+            const addedCount = parseInt("${{ steps.commit-changes.outputs.added_count }}") || 0;
             const totalGenerated = jsonGenerated + dicGenerated + decryptGenerated;
+            const hasChanges = "${{ steps.check-changes.outputs.has_changes }}" === 'true';
             const existingPRNumber = "${{ steps.handle-branch.outputs.pr_number }}";
             
             // Build dynamic title and summary
@@ -366,12 +367,22 @@ jobs:
             
             const title = `Auto-generate ${titleParts.join(', ')} RFID files`;
             
+            // Determine the right message for files added
+            let filesAddedMsg;
+            if (!hasChanges) {
+              filesAddedMsg = '- **Files Added to PR**: 0 (all files already exist)';
+            } else if (addedCount > 0) {
+              filesAddedMsg = `- **Files Added to PR**: ${addedCount}`;
+            } else {
+              filesAddedMsg = '- **Files Added to PR**: 0 (no changes to commit)';
+            }
+            
             const prBody = [
               '## 🤖 Automated RFID File Generation',
               '',
               ...summaryParts,
               `- **Total Files Processed**: ${totalGenerated}`,
-              addedCount > 0 ? `- **Files Added to PR**: ${addedCount}` : '- **Files Added to PR**: 0 (all files already exist)',
+              filesAddedMsg,
               '',
               '---',
               '',
@@ -398,7 +409,7 @@ jobs:
             const jsonGenerated = parseInt("${{ steps.generate-json.outputs.generated_count }}") || 0;
             const dicGenerated = parseInt("${{ steps.generate-dic.outputs.generated_count }}") || 0;
             const decryptGenerated = parseInt("${{ steps.generate-decrypted.outputs.json_generated }}") || 0;
-            const addedCount = "${{ steps.commit-changes.outputs.added_count }}";
+            const addedCount = parseInt("${{ steps.commit-changes.outputs.added_count }}") || 0;
             const totalGenerated = jsonGenerated + dicGenerated + decryptGenerated;
             const isUpdate = "${{ steps.handle-branch.outputs.is_update }}" === 'true';
             const existingPRNumber = "${{ steps.handle-branch.outputs.pr_number }}";
@@ -429,7 +440,7 @@ jobs:
               '',
               ...summaryParts,
               `- **Total Files Processed**: ${totalGenerated}`,
-              addedCount > 0 ? `- **Files Added to PR**: ${addedCount}` : '- **Files Added to PR**: 0 (all files already exist)',
+              `- **Files Added to PR**: ${addedCount}`,
               '',
               '---',
               '',
