@@ -82,6 +82,13 @@ jobs:
               await exec.exec('git', ['checkout', '-b', branchName]);
             }
             
+            // Push the branch to make it available for subsequent jobs
+            if (isNewPR) {
+              await exec.exec('git', ['push', '-u', 'origin', branchName]);
+            } else {
+              await exec.exec('git', ['push', 'origin', branchName]);
+            }
+            
             core.setOutput('branch_name', branchName);
             core.setOutput('pr_number', prNumber || '');
             core.setOutput('is_new_pr', isNewPR);
