@@ -153,10 +153,14 @@ def main():
         print(f"❌ Failed: {failed_count}")
         print(f"📁 Total processed: {len(missing_files)}")
         
+        # Always output success rate for workflow parsing
+        total_files = converted_count + failed_count
+        success_rate = (converted_count/total_files*100) if total_files > 0 else 100.0
+        print(f"📊 Success rate: {success_rate:.1f}%")
+        
         if failed_count > 0:
             print(f"\n⚠️  {failed_count} files failed to convert")
             print(f"✅ {converted_count} files converted successfully")  
-            print(f"📊 Success rate: {(converted_count/(converted_count+failed_count)*100):.1f}%")
             # Don't exit with error - partial success is acceptable
         else:
             print(f"\n🎉 All .dic files generated successfully!")

@@ -171,14 +171,54 @@ jobs:
               git status --porcelain
           fi
       
-      - name: Create branch and commit changes
+      - name: Check for existing PR and handle branch
         if: steps.check-changes.outputs.has_changes == 'true'
-        id: create-branch
+        id: handle-branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Check for existing open PRs with automation labels
+            const { data: openPRs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:auto/json-generation`
+            });
+            
+            let branchName, isUpdate = false;
+            
+            if (openPRs.length > 0) {
+              // Use existing PR branch
+              branchName = 'auto/json-generation';
+              isUpdate = true;
+              core.setOutput('pr_number', openPRs[0].number);
+              console.log(`Found existing PR #${openPRs[0].number}, will update it`);
+            } else {
+              // Create new branch
+              branchName = 'auto/json-generation';
+              isUpdate = false;
+              console.log('No existing PR found, will create new one');
+            }
+            
+            core.setOutput('branch_name', branchName);
+            core.setOutput('is_update', isUpdate);
+
+      - name: Create or update branch and commit changes  
+        if: steps.check-changes.outputs.has_changes == 'true'
+        id: commit-changes
         run: |
-          BRANCH_NAME="auto/json-$(date +%Y%m%d-%H%M%S)"
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          BRANCH_NAME="${{ steps.handle-branch.outputs.branch_name }}"
+          IS_UPDATE="${{ steps.handle-branch.outputs.is_update }}"
           
-          git checkout -b "$BRANCH_NAME"
+          if [ "$IS_UPDATE" = "true" ]; then
+            # Switch to existing branch and pull latest
+            git fetch origin
+            git checkout "$BRANCH_NAME" || git checkout -b "$BRANCH_NAME"
+            git pull origin "$BRANCH_NAME" || true
+          else
+            # Create new branch
+            git checkout -b "$BRANCH_NAME"
+          fi
           
           # Add all new JSON files
           git add *.json **/*.json 2>/dev/null || true
@@ -186,37 +226,44 @@ jobs:
           ADDED_COUNT=$(git diff --cached --name-only | wc -l)
           echo "added_count=$ADDED_COUNT" >> $GITHUB_OUTPUT
           
-          git commit -m "feat: auto-generate JSON files for RFID dumps
+          if [ $ADDED_COUNT -gt 0 ]; then
+            git commit -m "feat: auto-generate JSON files for RFID dumps
 
-          - Generated JSON files for ${{ steps.generate-json.outputs.generated_count }} RFID .bin files
-          - Used parse.py with proper YAML-to-JSON conversion
-          - Includes complete temperature profiles and metadata
-          - Automated via GitHub Actions workflow
-          
-          Generated files: $ADDED_COUNT"
-          
-          git push origin "$BRANCH_NAME"
-          echo "Created branch: $BRANCH_NAME"
+            - Generated JSON files for ${{ steps.generate-json.outputs.generated_count }} RFID .bin files  
+            - Used parse.py with proper YAML-to-JSON conversion
+            - Includes complete temperature profiles and metadata
+            - Automated via GitHub Actions workflow
+            
+            Generated files: $ADDED_COUNT"
+            
+            git push origin "$BRANCH_NAME"
+            echo "Pushed $ADDED_COUNT files to branch: $BRANCH_NAME"
+          else
+            echo "No files to commit"
+          fi
       
-      - name: Create Pull Request
+      - name: Create or update Pull Request
         if: steps.check-changes.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const branchName = "${{ steps.create-branch.outputs.branch_name }}";
+            const branchName = "${{ steps.handle-branch.outputs.branch_name }}";
             const generatedCount = "${{ steps.generate-json.outputs.generated_count }}";
-            const addedCount = "${{ steps.create-branch.outputs.added_count }}";
+            const addedCount = "${{ steps.commit-changes.outputs.added_count }}";
             const totalMissing = "${{ needs.check-missing-files.outputs.total_missing_json }}";
+            const isUpdate = "${{ steps.handle-branch.outputs.is_update }}" === 'true';
+            const existingPRNumber = "${{ steps.handle-branch.outputs.pr_number }}";
             
             const prBody = [
               '## 🤖 Automated RFID JSON Generation',
               '',
               'This PR automatically generates missing JSON files for RFID .bin dumps.',
               '',
-              '### Summary',
+              '### Latest Update Summary',
               `- **Generated**: ${generatedCount} new JSON files`,
-              `- **Total Missing Found**: ${totalMissing} files`,
-              `- **Files Added**: ${addedCount} files`,
+              `- **Total Missing Found**: ${totalMissing} files`, 
+              `- **Files Added This Run**: ${addedCount} files`,
+              `- **Last Updated**: ${new Date().toISOString()}`,
               '',
               '### Process',
               '1. 🔍 Scanned RFID library for .bin files without corresponding .json files',
@@ -233,27 +280,50 @@ jobs:
               '',
               '---',
               '',
-              '🤖 This PR was automatically created by the RFID automation workflow.'
+              isUpdate ? '🤖 This PR was automatically updated by the RFID automation workflow.' : '🤖 This PR was automatically created by the RFID automation workflow.'
             ].join('\\n');
             
-            const { data: pullRequest } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `Auto-generate ${generatedCount} missing RFID JSON files`,
-              head: branchName,
-              base: 'main',
-              body: prBody,
-              draft: false
-            });
-            
-            console.log('Created PR #' + pullRequest.number + ': ' + pullRequest.html_url);
-            
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              labels: ['rfid', 'automation', 'json-generation']
-            });
+            if (isUpdate && existingPRNumber) {
+              // Update existing PR
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: parseInt(existingPRNumber),
+                title: `Auto-generate ${generatedCount} RFID JSON files`,
+                body: prBody
+              });
+              
+              console.log(`Updated existing PR #${existingPRNumber}`);
+              
+              // Add comment about the update
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: parseInt(existingPRNumber),
+                body: `🤖 **Automated Update**: Added ${addedCount} new JSON files from latest RFID dump processing.`
+              });
+              
+            } else {
+              // Create new PR
+              const { data: pullRequest } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Auto-generate ${generatedCount} RFID JSON files`,
+                head: branchName,
+                base: 'main',
+                body: prBody,
+                draft: false
+              });
+              
+              console.log('Created PR #' + pullRequest.number + ': ' + pullRequest.html_url);
+              
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: ['rfid', 'automation', 'json-generation']
+              });
+            }
 
   generate-dic-files:
     name: Generate Missing Dictionary Files

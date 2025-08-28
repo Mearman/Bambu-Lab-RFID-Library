@@ -262,10 +262,14 @@ def main():
         print(f"❌ Failed: {failed_count}")
         print(f"📁 Total processed: {len(missing_files)}")
         
+        # Always output success rate for workflow parsing
+        total_files = generated_count + failed_count
+        success_rate = (generated_count/total_files*100) if total_files > 0 else 100.0
+        print(f"📊 Success rate: {success_rate:.1f}%")
+        
         if failed_count > 0:
             print(f"\n⚠️  {failed_count} files failed to generate")
             print(f"✅ {generated_count} files generated successfully")
-            print(f"📊 Success rate: {(generated_count/(generated_count+failed_count)*100):.1f}%")
             # Don't exit with error - partial success is acceptable  
         else:
             print(f"\n🎉 All JSON files generated successfully!")

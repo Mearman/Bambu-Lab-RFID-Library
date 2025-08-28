@@ -449,10 +449,14 @@ def main():
         print(f"❌ Failed: {failed_count}")
         print(f"📁 Total processed: {len(missing_files)}")
         
+        # Always output success rate for workflow parsing
+        total_files = decrypted_count + failed_count
+        success_rate = (decrypted_count/total_files*100) if total_files > 0 else 100.0
+        print(f"📊 Success rate: {success_rate:.1f}%")
+        
         if failed_count > 0:
             print(f"\\n⚠️  {failed_count} files failed to decrypt")
             print(f"✅ {decrypted_count} files decrypted successfully")
-            print(f"📊 Success rate: {(decrypted_count/(decrypted_count+failed_count)*100):.1f}%")
             # Don't exit with error - partial success is acceptable
         else:
             print(f"\\n🎉 All dump files decrypted to JSON successfully!")
