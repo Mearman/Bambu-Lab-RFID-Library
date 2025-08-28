@@ -154,8 +154,24 @@ def generate_json_for_bin(bin_file: str, parse_script: str = 'parse.py') -> bool
         print(f"❌ Failed to process {bin_file}: {e}")
         return False
 
+def is_encrypted_json(json_path: str) -> bool:
+    """Check if JSON file contains encrypted Proxmark3 format data."""
+    try:
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+            # Encrypted JSON files have Proxmark3 structure with blocks
+            return (data.get("Created") == "proxmark3" or 
+                    "blocks" in data or 
+                    data.get("FileType") == "mfc v2")
+    except (json.JSONDecodeError, FileNotFoundError):
+        return False
+
 def find_missing_json_files(directory: str, force_regenerate: bool = False) -> List[str]:
-    """Find .bin files that don't have corresponding .json files."""
+    """Find .bin files that don't have corresponding .json files.
+    
+    Note: Never overwrites existing encrypted JSON files, even with force_regenerate=True.
+    Encrypted JSON files (Proxmark3 format) are preserved to maintain original dump data.
+    """
     missing_files = []
     
     # Find all .bin files, excluding key files
@@ -166,7 +182,11 @@ def find_missing_json_files(directory: str, force_regenerate: bool = False) -> L
     for bin_file in bin_files:
         json_file = bin_file.replace('.bin', '.json')
         
-        if force_regenerate or not os.path.exists(json_file):
+        # Only process if no JSON exists, OR if force_regenerate AND it's not encrypted format
+        if not os.path.exists(json_file):
+            missing_files.append(bin_file)
+        elif force_regenerate and not is_encrypted_json(json_file):
+            # Only regenerate if it's not an encrypted Proxmark3 format file
             missing_files.append(bin_file)
     
     return missing_files
