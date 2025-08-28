@@ -64,15 +64,15 @@ jobs:
         id: find-missing
         run: |
           echo "Scanning for missing JSON files..."
-          python3 .github/scripts/local-json-generator.py . --dry-run --force=${{ github.event.inputs.force_regenerate == 'true' }} > json_check.log 2>&1
+          python3 .github/scripts/local-json-generator.py . --dry-run ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > json_check.log 2>&1
           JSON_COUNT=$(grep "Found.*files needing JSON generation" json_check.log | grep -o '[0-9]*' | head -1 || echo "0")
           
           echo "Scanning for missing dictionary files..."
-          python3 .github/scripts/key-to-dic-converter.py . --dry-run --force=${{ github.event.inputs.force_regenerate == 'true' }} > keys_check.log 2>&1
+          python3 .github/scripts/key-to-dic-converter.py . --dry-run ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > keys_check.log 2>&1
           KEYS_COUNT=$(grep "Found.*files needing .dic conversion" keys_check.log | grep -o '[0-9]*' | head -1 || echo "0")
           
           echo "Scanning for missing decrypted files..."
-          python3 .github/scripts/decrypt-rfid-dumps.py . --dry-run --force=${{ github.event.inputs.force_regenerate == 'true' }} > decrypt_check.log 2>&1
+          python3 .github/scripts/decrypt-rfid-dumps.py . --dry-run ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > decrypt_check.log 2>&1
           DECRYPT_COUNT=$(grep "Found.*files needing decryption" decrypt_check.log | grep -o '[0-9]*' | head -1 || echo "0")
           
           echo "Found files needing processing:"
@@ -147,7 +147,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "Generating JSON files from RFID dumps..."
-          python3 .github/scripts/local-json-generator.py . --force=${{ github.event.inputs.force_regenerate == 'true' }} 2>&1 | tee json_generation.log
+          python3 .github/scripts/local-json-generator.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} 2>&1 | tee json_generation.log
           
           # Extract success metrics from output
           JSON_GENERATED=$(grep "Successfully generated:" json_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
@@ -284,7 +284,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "Converting key.bin files to .dic format..."
-          python3 .github/scripts/key-to-dic-converter.py . --force=${{ github.event.inputs.force_regenerate == 'true' }} 2>&1 | tee dic_generation.log
+          python3 .github/scripts/key-to-dic-converter.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} 2>&1 | tee dic_generation.log
           
           # Extract success metrics from output
           DIC_GENERATED=$(grep "Successfully converted:" dic_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
@@ -389,7 +389,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "Decrypt RFID dumps and generate JSON files directly..."
-          python3 .github/scripts/decrypt-rfid-dumps.py . --force=${{ github.event.inputs.force_regenerate == 'true' }} 2>&1 | tee decrypt_generation.log
+          python3 .github/scripts/decrypt-rfid-dumps.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} 2>&1 | tee decrypt_generation.log
           
           # Extract success metrics from output
           DECRYPT_GENERATED=$(grep "Successfully decrypted:" decrypt_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
