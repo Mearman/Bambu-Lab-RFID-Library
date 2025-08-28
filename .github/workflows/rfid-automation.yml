@@ -393,7 +393,7 @@ jobs:
               '---',
               '',
               isUpdate ? '🤖 This PR was automatically updated by the RFID automation workflow.' : '🤖 This PR was automatically created by the RFID automation workflow.'
-            ].join('\\n');
+            ].join('\n');
             
             if (isUpdate && existingPRNumber) {
               // Update existing PR
