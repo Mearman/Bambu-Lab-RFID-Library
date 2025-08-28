@@ -119,6 +119,10 @@ jobs:
     needs: check-missing-files
     if: needs.check-missing-files.outputs.has_missing_json == 'true'
     timeout-minutes: 30
+    outputs:
+      generated_count: ${{ steps.generate-json.outputs.generated_count }}
+      json_failed: ${{ steps.generate-json.outputs.json_failed }}
+      json_success_rate: ${{ steps.generate-json.outputs.json_success_rate }}
     
     steps:
       - name: Checkout repository
@@ -339,6 +343,10 @@ jobs:
     needs: check-missing-files
     if: needs.check-missing-files.outputs.has_missing_keys == 'true'
     timeout-minutes: 15
+    outputs:
+      generated_count: ${{ steps.generate-dic.outputs.generated_count }}
+      dic_failed: ${{ steps.generate-dic.outputs.dic_failed }}
+      dic_success_rate: ${{ steps.generate-dic.outputs.dic_success_rate }}
     
     steps:
       - name: Checkout repository
@@ -447,6 +455,10 @@ jobs:
     needs: check-missing-files
     if: needs.check-missing-files.outputs.has_missing_decrypted == 'true'
     timeout-minutes: 45
+    outputs:
+      json_generated: ${{ steps.generate-decrypted.outputs.json_generated }}
+      decrypt_failed: ${{ steps.generate-decrypted.outputs.decrypt_failed }}
+      decrypt_success_rate: ${{ steps.generate-decrypted.outputs.decrypt_success_rate }}
     
     steps:
       - name: Checkout repository
