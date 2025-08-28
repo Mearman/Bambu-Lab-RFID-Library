@@ -151,10 +151,18 @@ jobs:
         continue-on-error: true
         run: |
           echo "Generating JSON files from RFID dumps..."
+          echo "Working directory: $(pwd)"
+          echo "Repository contents: $(ls -la | head -10)"
+          
           python3 .github/scripts/local-json-generator.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > json_generation.log 2>&1
           
           # Ensure log file is fully written
           sleep 1
+          
+          echo "Generation log contents:"
+          head -20 json_generation.log
+          echo "..."
+          tail -10 json_generation.log
           
           # Extract success metrics from output
           JSON_GENERATED=$(grep "Successfully generated:" json_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
@@ -174,6 +182,15 @@ jobs:
       - name: Check for changes
         id: check-changes
         run: |
+          echo "Checking for git changes..."
+          echo "Working directory: $(pwd)"
+          echo "Git status --porcelain:"
+          git status --porcelain
+          echo "Git diff --name-only:"
+          git diff --name-only
+          echo "Untracked files:"
+          git ls-files --others --exclude-standard
+          
           if git diff --quiet && git diff --cached --quiet; then
               echo "has_changes=false" >> $GITHUB_OUTPUT
               echo "No changes detected"
