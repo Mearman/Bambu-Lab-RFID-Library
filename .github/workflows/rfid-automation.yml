@@ -29,9 +29,67 @@ permissions:
   pull-requests: write
 
 jobs:
+  setup-pr-branch:
+    name: Setup PR Branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      branch_name: ${{ steps.setup-branch.outputs.branch_name }}
+      pr_number: ${{ steps.setup-branch.outputs.pr_number }}
+      is_new_pr: ${{ steps.setup-branch.outputs.is_new_pr }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Setup PR branch
+        id: setup-branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branchName = 'auto/rfid-generation';
+            
+            // Check for existing open PRs with this branch
+            const { data: openPRs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${branchName}`
+            });
+            
+            let prNumber = null;
+            let isNewPR = true;
+            
+            if (openPRs.length > 0) {
+              prNumber = openPRs[0].number;
+              isNewPR = false;
+              console.log(`Found existing PR #${prNumber}, will merge into it`);
+              
+              // Switch to existing PR branch and merge main
+              await exec.exec('git', ['fetch', 'origin', branchName]);
+              await exec.exec('git', ['checkout', branchName]);
+              await exec.exec('git', ['merge', 'origin/main', '--no-edit']);
+            } else {
+              console.log('No existing PR found, will create new branch');
+              await exec.exec('git', ['checkout', '-b', branchName]);
+            }
+            
+            core.setOutput('branch_name', branchName);
+            core.setOutput('pr_number', prNumber || '');
+            core.setOutput('is_new_pr', isNewPR);
+
   check-missing-files:
     name: Check for Missing Files
     runs-on: ubuntu-latest
+    needs: setup-pr-branch
     timeout-minutes: 15
     outputs:
       missing_json: ${{ steps.find-missing.outputs.missing_json }}
@@ -49,6 +107,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ needs.setup-pr-branch.outputs.branch_name }}
       
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -116,7 +175,7 @@ jobs:
   generate-all-files:
     name: Generate All Missing Files
     runs-on: ubuntu-latest
-    needs: check-missing-files
+    needs: [setup-pr-branch, check-missing-files]
     if: |
       needs.check-missing-files.outputs.has_missing_json == 'true' ||
       needs.check-missing-files.outputs.has_missing_keys == 'true' ||
@@ -138,6 +197,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ needs.setup-pr-branch.outputs.branch_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Setup Python
@@ -245,55 +305,11 @@ jobs:
               git status --porcelain
           fi
       
-      - name: Check for existing PR and handle branch
-        if: steps.check-changes.outputs.has_changes == 'true'
-        id: handle-branch
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // Check for existing open PRs with automation labels
-            const { data: openPRs } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              head: `${context.repo.owner}:auto/json-generation`
-            });
-            
-            let branchName, isUpdate = false;
-            
-            if (openPRs.length > 0) {
-              // Use existing PR branch
-              branchName = 'auto/json-generation';
-              isUpdate = true;
-              core.setOutput('pr_number', openPRs[0].number);
-              console.log(`Found existing PR #${openPRs[0].number}, will update it`);
-            } else {
-              // Create new branch
-              branchName = 'auto/json-generation';
-              isUpdate = false;
-              console.log('No existing PR found, will create new one');
-            }
-            
-            core.setOutput('branch_name', branchName);
-            core.setOutput('is_update', isUpdate);
-
-      - name: Create or update branch and commit changes  
+      - name: Commit changes
         if: steps.check-changes.outputs.has_changes == 'true'
         id: commit-changes
         run: |
-          BRANCH_NAME="${{ steps.handle-branch.outputs.branch_name }}"
-          IS_UPDATE="${{ steps.handle-branch.outputs.is_update }}"
-          
-          if [ "$IS_UPDATE" = "true" ]; then
-            # Switch to existing branch, handling conflicts by resetting
-            git fetch origin
-            git checkout "$BRANCH_NAME" || git checkout -b "$BRANCH_NAME"
-            # Force sync with remote branch, discarding local changes
-            git reset --hard "origin/$BRANCH_NAME" || true
-          else
-            # Create new branch
-            git checkout -b "$BRANCH_NAME"
-          fi
+          BRANCH_NAME="${{ needs.setup-pr-branch.outputs.branch_name }}"
           
           # Add all generated files
           git add *.json **/*.json 2>/dev/null || true
@@ -333,7 +349,7 @@ jobs:
           fi
       
       - name: Get PR file statistics
-        if: steps.check-changes.outputs.has_changes == 'true' && steps.handle-branch.outputs.is_update == 'true'
+        if: steps.check-changes.outputs.has_changes == 'true' && needs.setup-pr-branch.outputs.is_new_pr == 'false'
         id: pr-stats
         run: |
           # Get total files in the PR by comparing with main branch
@@ -361,10 +377,10 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const branchName = "${{ steps.handle-branch.outputs.branch_name }}";
+            const branchName = "${{ needs.setup-pr-branch.outputs.branch_name }}";
             const addedCount = parseInt("${{ steps.commit-changes.outputs.added_count }}") || 0;
-            const isUpdate = "${{ steps.handle-branch.outputs.is_update }}" === 'true';
-            const existingPRNumber = "${{ steps.handle-branch.outputs.pr_number }}";
+            const isUpdate = "${{ needs.setup-pr-branch.outputs.is_new_pr }}" === 'false';
+            const existingPRNumber = "${{ needs.setup-pr-branch.outputs.pr_number }}";
             
             // Use PR cumulative stats if updating, otherwise use latest run stats for new PR
             let jsonFiles, dicFiles, decryptedFiles, totalFiles;
@@ -468,7 +484,7 @@ jobs:
   summary:
     name: RFID Processing Summary
     runs-on: ubuntu-latest
-    needs: [check-missing-files, generate-all-files]
+    needs: [setup-pr-branch, check-missing-files, generate-all-files]
     if: always()
     
     steps:
