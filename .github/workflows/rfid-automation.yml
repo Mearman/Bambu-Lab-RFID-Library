@@ -113,16 +113,25 @@ jobs:
             echo "missing_decrypted=[]" >> $GITHUB_OUTPUT
           fi
 
-  generate-json-files:
-    name: Generate Missing JSON Files
+  generate-all-files:
+    name: Generate All Missing Files
     runs-on: ubuntu-latest
     needs: check-missing-files
-    if: needs.check-missing-files.outputs.has_missing_json == 'true'
-    timeout-minutes: 30
+    if: |
+      needs.check-missing-files.outputs.has_missing_json == 'true' ||
+      needs.check-missing-files.outputs.has_missing_keys == 'true' ||
+      needs.check-missing-files.outputs.has_missing_decrypted == 'true'
+    timeout-minutes: 60
     outputs:
-      generated_count: ${{ steps.generate-json.outputs.generated_count }}
+      json_generated: ${{ steps.generate-json.outputs.generated_count }}
       json_failed: ${{ steps.generate-json.outputs.json_failed }}
       json_success_rate: ${{ steps.generate-json.outputs.json_success_rate }}
+      dic_generated: ${{ steps.generate-dic.outputs.generated_count }}
+      dic_failed: ${{ steps.generate-dic.outputs.dic_failed }}
+      dic_success_rate: ${{ steps.generate-dic.outputs.dic_success_rate }}
+      decrypt_generated: ${{ steps.generate-decrypted.outputs.json_generated }}
+      decrypt_failed: ${{ steps.generate-decrypted.outputs.decrypt_failed }}
+      decrypt_success_rate: ${{ steps.generate-decrypted.outputs.decrypt_success_rate }}
     
     steps:
       - name: Checkout repository
@@ -148,6 +157,7 @@ jobs:
       
       - name: Generate JSON files
         id: generate-json
+        if: needs.check-missing-files.outputs.has_missing_json == 'true'
         continue-on-error: true
         run: |
           echo "Generating JSON files from RFID dumps..."
@@ -170,6 +180,58 @@ jobs:
           echo "  Failed: $JSON_FAILED" 
           echo "  Success Rate: $SUCCESS_RATE"
           echo "Generated $JSON_GENERATED JSON files (${JSON_FAILED} failed, ${SUCCESS_RATE} success rate)"
+
+      - name: Generate dictionary files
+        id: generate-dic
+        if: needs.check-missing-files.outputs.has_missing_keys == 'true'
+        continue-on-error: true
+        run: |
+          echo "Converting key.bin files to .dic format..."
+          python3 .github/scripts/key-to-dic-converter.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > dic_generation.log 2>&1
+          
+          # Ensure log file is fully written
+          sleep 1
+          
+          # Extract success metrics from output
+          DIC_GENERATED=$(grep "Successfully converted:" dic_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
+          DIC_FAILED=$(grep "Failed:" dic_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
+          SUCCESS_RATE=$(grep "Success rate:" dic_generation.log | grep -o '[0-9.]*%' || echo "0%")
+          
+          echo "generated_count=$DIC_GENERATED" >> $GITHUB_OUTPUT
+          echo "dic_failed=$DIC_FAILED" >> $GITHUB_OUTPUT
+          echo "dic_success_rate=$SUCCESS_RATE" >> $GITHUB_OUTPUT
+          
+          echo "Metrics extracted:"
+          echo "  Generated: $DIC_GENERATED"
+          echo "  Failed: $DIC_FAILED"
+          echo "  Success Rate: $SUCCESS_RATE"
+          echo "Generated $DIC_GENERATED dictionary files (${DIC_FAILED} failed, ${SUCCESS_RATE} success rate)"
+
+      - name: Generate decrypted files
+        id: generate-decrypted
+        if: needs.check-missing-files.outputs.has_missing_decrypted == 'true'
+        continue-on-error: true
+        run: |
+          echo "Decrypt RFID dumps and generate JSON files directly..."
+          python3 .github/scripts/decrypt-rfid-dumps.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > decrypt_generation.log 2>&1
+          
+          # Ensure log file is fully written
+          sleep 1
+          
+          # Extract success metrics from output
+          DECRYPT_GENERATED=$(grep "Successfully decrypted:" decrypt_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
+          DECRYPT_FAILED=$(grep "Failed:" decrypt_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
+          SUCCESS_RATE=$(grep "Success rate:" decrypt_generation.log | grep -o '[0-9.]*%' || echo "0%")
+          
+          echo "json_generated=$DECRYPT_GENERATED" >> $GITHUB_OUTPUT
+          echo "decrypt_failed=$DECRYPT_FAILED" >> $GITHUB_OUTPUT
+          echo "decrypt_success_rate=$SUCCESS_RATE" >> $GITHUB_OUTPUT
+          
+          echo "Metrics extracted:"
+          echo "  Generated: $DECRYPT_GENERATED"
+          echo "  Failed: $DECRYPT_FAILED"
+          echo "  Success Rate: $SUCCESS_RATE"
+          echo "Generated $DECRYPT_GENERATED decrypted JSON files (${DECRYPT_FAILED} failed, ${SUCCESS_RATE} success rate)"
       
       - name: Check for changes
         id: check-changes
@@ -232,21 +294,36 @@ jobs:
             git checkout -b "$BRANCH_NAME"
           fi
           
-          # Add all new JSON files
+          # Add all generated files
           git add *.json **/*.json 2>/dev/null || true
+          git add *.dic **/*.dic 2>/dev/null || true
+          git add *-decrypted.json **/*-decrypted.json 2>/dev/null || true
           
           ADDED_COUNT=$(git diff --cached --name-only | wc -l)
           echo "added_count=$ADDED_COUNT" >> $GITHUB_OUTPUT
           
           if [ $ADDED_COUNT -gt 0 ]; then
-            git commit -m "feat: auto-generate JSON files for RFID dumps
-
-            - Generated JSON files for ${{ steps.generate-json.outputs.generated_count }} RFID .bin files  
-            - Used parse.py with proper YAML-to-JSON conversion
-            - Includes complete temperature profiles and metadata
-            - Automated via GitHub Actions workflow
+            # Build commit message with all generation types
+            COMMIT_MSG="feat: auto-generate RFID processing files"
+            COMMIT_BODY=""
             
-            Generated files: $ADDED_COUNT"
+            if [ "${{ steps.generate-json.outputs.generated_count }}" != "0" ]; then
+              COMMIT_BODY="${COMMIT_BODY}- Generated ${{ steps.generate-json.outputs.generated_count }} JSON files from RFID .bin dumps\n"
+            fi
+            
+            if [ "${{ steps.generate-dic.outputs.generated_count }}" != "0" ]; then
+              COMMIT_BODY="${COMMIT_BODY}- Generated ${{ steps.generate-dic.outputs.generated_count }} dictionary files from key.bin files\n"
+            fi
+            
+            if [ "${{ steps.generate-decrypted.outputs.json_generated }}" != "0" ]; then
+              COMMIT_BODY="${COMMIT_BODY}- Generated ${{ steps.generate-decrypted.outputs.json_generated }} decrypted JSON files from encrypted dumps\n"
+            fi
+            
+            COMMIT_BODY="${COMMIT_BODY}- Used parse.py, key derivation, and decryption tools\n"
+            COMMIT_BODY="${COMMIT_BODY}- Includes complete temperature profiles and metadata\n"
+            COMMIT_BODY="${COMMIT_BODY}- Automated via GitHub Actions workflow\n\nGenerated files: $ADDED_COUNT"
+            
+            git commit -m "$COMMIT_MSG" -m "$COMMIT_BODY"
             
             git push origin "$BRANCH_NAME"
             echo "Pushed $ADDED_COUNT files to branch: $BRANCH_NAME"
@@ -260,35 +337,57 @@ jobs:
         with:
           script: |
             const branchName = "${{ steps.handle-branch.outputs.branch_name }}";
-            const generatedCount = "${{ steps.generate-json.outputs.generated_count }}";
+            const jsonGenerated = parseInt("${{ steps.generate-json.outputs.generated_count }}") || 0;
+            const dicGenerated = parseInt("${{ steps.generate-dic.outputs.generated_count }}") || 0;
+            const decryptGenerated = parseInt("${{ steps.generate-decrypted.outputs.json_generated }}") || 0;
             const addedCount = "${{ steps.commit-changes.outputs.added_count }}";
-            const totalMissing = "${{ needs.check-missing-files.outputs.total_missing_json }}";
+            const totalGenerated = jsonGenerated + dicGenerated + decryptGenerated;
             const isUpdate = "${{ steps.handle-branch.outputs.is_update }}" === 'true';
             const existingPRNumber = "${{ steps.handle-branch.outputs.pr_number }}";
             
+            // Build dynamic title and summary
+            let titleParts = [];
+            let summaryParts = [];
+            
+            if (jsonGenerated > 0) {
+              titleParts.push(`${jsonGenerated} JSON`);
+              summaryParts.push(`- **JSON Files**: ${jsonGenerated} generated from RFID .bin dumps`);
+            }
+            
+            if (dicGenerated > 0) {
+              titleParts.push(`${dicGenerated} dictionary`);
+              summaryParts.push(`- **Dictionary Files**: ${dicGenerated} generated from key.bin files`);
+            }
+            
+            if (decryptGenerated > 0) {
+              titleParts.push(`${decryptGenerated} decrypted`);
+              summaryParts.push(`- **Decrypted Files**: ${decryptGenerated} generated from encrypted dumps`);
+            }
+            
+            const title = `Auto-generate ${titleParts.join(', ')} RFID files`;
+            
             const prBody = [
-              '## 🤖 Automated RFID JSON Generation',
+              '## 🤖 Automated RFID File Processing',
               '',
-              'This PR automatically generates missing JSON files for RFID .bin dumps.',
+              'This PR automatically generates missing files for RFID data processing.',
               '',
               '### Latest Update Summary',
-              `- **Generated**: ${generatedCount} new JSON files`,
-              `- **Total Missing Found**: ${totalMissing} files`, 
-              `- **Files Added This Run**: ${addedCount} files`,
+              ...summaryParts,
+              `- **Total Files Added**: ${addedCount} files`,
               `- **Last Updated**: ${new Date().toISOString()}`,
               '',
-              '### Process',
-              '1. 🔍 Scanned RFID library for .bin files without corresponding .json files',
-              '2. 🔄 Used `parse.py` to extract RFID data from binary dumps',
-              '3. 📝 Converted YAML-like output to proper JSON format',
-              '4. ✅ Added complete temperature profiles and metadata',
+              '### Processing Pipeline',
+              '1. 🔍 Scanned RFID library for missing files',
+              '2. 📋 Generated JSON files from .bin dumps using parse.py',
+              '3. 🔑 Created dictionary files from key.bin files for Proxmark3',
+              '4. 🔓 Decrypted dumps and generated comprehensive JSON metadata',
+              '5. ✅ Applied proper format conversion and validation',
               '',
               '### Generated Files Include',
-              '- Material identification (type, variant ID, material ID)',
-              '- Temperature profiles (hotend, bed, drying parameters)',
-              '- Physical properties (weight, dimensions, color)',
-              '- Production metadata (date, tray UID)',
-              '- RFID technical data (UID, x_cam_info)',
+              '- **JSON Files**: Material identification, temperature profiles, physical properties',
+              '- **Dictionary Files**: Hex-formatted cryptographic keys for RFID tools',
+              '- **Decrypted Files**: Complete filament metadata from decrypted dumps',
+              '- **Metadata**: Production dates, tray UIDs, RFID technical data',
               '',
               '---',
               '',
@@ -301,7 +400,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: parseInt(existingPRNumber),
-                title: `Auto-generate ${generatedCount} RFID JSON files`,
+                title: title,
                 body: prBody
               });
               
@@ -312,7 +411,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: parseInt(existingPRNumber),
-                body: `🤖 **Automated Update**: Added ${addedCount} new JSON files from latest RFID dump processing.`
+                body: `🤖 **Automated Update**: Added ${addedCount} files (${titleParts.join(', ')}) from latest RFID processing run.`
               });
               
             } else {
@@ -320,7 +419,7 @@ jobs:
               const { data: pullRequest } = await github.rest.pulls.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title: `Auto-generate ${generatedCount} RFID JSON files`,
+                title: title,
                 head: branchName,
                 base: 'main',
                 body: prBody,
@@ -329,251 +428,25 @@ jobs:
               
               console.log('Created PR #' + pullRequest.number + ': ' + pullRequest.html_url);
               
+              // Apply comprehensive labels
+              const labels = ['rfid', 'automation'];
+              if (jsonGenerated > 0) labels.push('json-generation');
+              if (dicGenerated > 0) labels.push('cryptography');
+              if (decryptGenerated > 0) labels.push('decryption');
+              
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pullRequest.number,
-                labels: ['rfid', 'automation', 'json-generation']
+                labels: labels
               });
             }
 
-  generate-dic-files:
-    name: Generate Missing Dictionary Files
-    runs-on: ubuntu-latest
-    needs: check-missing-files
-    if: needs.check-missing-files.outputs.has_missing_keys == 'true'
-    timeout-minutes: 15
-    outputs:
-      generated_count: ${{ steps.generate-dic.outputs.generated_count }}
-      dic_failed: ${{ steps.generate-dic.outputs.dic_failed }}
-      dic_success_rate: ${{ steps.generate-dic.outputs.dic_success_rate }}
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-      
-      - name: Generate dictionary files
-        id: generate-dic
-        continue-on-error: true
-        run: |
-          echo "Converting key.bin files to .dic format..."
-          python3 .github/scripts/key-to-dic-converter.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > dic_generation.log 2>&1
-          
-          # Ensure log file is fully written
-          sleep 1
-          
-          # Extract success metrics from output
-          DIC_GENERATED=$(grep "Successfully converted:" dic_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
-          DIC_FAILED=$(grep "Failed:" dic_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
-          SUCCESS_RATE=$(grep "Success rate:" dic_generation.log | grep -o '[0-9.]*%' || echo "0%")
-          
-          echo "generated_count=$DIC_GENERATED" >> $GITHUB_OUTPUT
-          echo "dic_failed=$DIC_FAILED" >> $GITHUB_OUTPUT
-          echo "dic_success_rate=$SUCCESS_RATE" >> $GITHUB_OUTPUT
-          
-          echo "Metrics extracted:"
-          echo "  Generated: $DIC_GENERATED"
-          echo "  Failed: $DIC_FAILED"
-          echo "  Success Rate: $SUCCESS_RATE"
-          echo "Generated $DIC_GENERATED dictionary files (${DIC_FAILED} failed, ${SUCCESS_RATE} success rate)"
-      
-      - name: Check for changes
-        id: check-changes
-        run: |
-          if [[ -z "$(git status --porcelain)" ]]; then
-              echo "has_changes=false" >> $GITHUB_OUTPUT
-              echo "No changes detected"
-          else
-              echo "has_changes=true" >> $GITHUB_OUTPUT
-              echo "Changes detected:"
-              git status --porcelain
-          fi
-      
-      - name: Create branch and commit changes
-        if: steps.check-changes.outputs.has_changes == 'true'
-        id: create-branch
-        run: |
-          BRANCH_NAME="auto/keys-$(date +%Y%m%d-%H%M%S)"
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          
-          git checkout -b "$BRANCH_NAME"
-          git add *.dic **/*.dic 2>/dev/null || true
-          
-          ADDED_COUNT=$(git diff --cached --name-only | wc -l)
-          echo "added_count=$ADDED_COUNT" >> $GITHUB_OUTPUT
-          
-          git commit -m "feat: auto-generate dictionary files for RFID keys
-
-          - Generated .dic files for ${{ steps.generate-dic.outputs.generated_count }} key.bin files
-          - Each .dic file contains hex-formatted cryptographic keys
-          - Used for RFID tag decryption with Proxmark3 and similar tools
-          - Automated via GitHub Actions workflow
-          
-          Generated files: $ADDED_COUNT"
-          
-          git push origin "$BRANCH_NAME"
-      
-      - name: Create Pull Request
-        if: steps.check-changes.outputs.has_changes == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const branchName = "${{ steps.create-branch.outputs.branch_name }}";
-            const generatedCount = "${{ steps.generate-dic.outputs.generated_count }}";
-            
-            const { data: pullRequest } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `Auto-generate ${generatedCount} RFID key dictionary files`,
-              head: branchName,
-              base: 'main',
-              body: `## 🔑 Automated RFID Key Dictionary Generation\\n\\nGenerated ${generatedCount} .dic files from key.bin files for Proxmark3 compatibility.`,
-              draft: false
-            });
-            
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              labels: ['rfid', 'automation', 'cryptography']
-            });
-
-  generate-decrypted-files:
-    name: Generate Decrypted JSON Files
-    runs-on: ubuntu-latest
-    needs: check-missing-files
-    if: needs.check-missing-files.outputs.has_missing_decrypted == 'true'
-    timeout-minutes: 45
-    outputs:
-      json_generated: ${{ steps.generate-decrypted.outputs.json_generated }}
-      decrypt_failed: ${{ steps.generate-decrypted.outputs.decrypt_failed }}
-      decrypt_success_rate: ${{ steps.generate-decrypted.outputs.decrypt_success_rate }}
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pycryptodome
-      
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-      
-      - name: Generate decrypted files
-        id: generate-decrypted
-        continue-on-error: true
-        run: |
-          echo "Decrypt RFID dumps and generate JSON files directly..."
-          python3 .github/scripts/decrypt-rfid-dumps.py . ${{ github.event.inputs.force_regenerate == 'true' && '--force' || '' }} > decrypt_generation.log 2>&1
-          
-          # Ensure log file is fully written
-          sleep 1
-          
-          # Extract success metrics from output
-          DECRYPT_GENERATED=$(grep "Successfully decrypted:" decrypt_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
-          DECRYPT_FAILED=$(grep "Failed:" decrypt_generation.log | grep -o '[0-9]*' | head -1 || echo "0")
-          SUCCESS_RATE=$(grep "Success rate:" decrypt_generation.log | grep -o '[0-9.]*%' || echo "0%")
-          
-          echo "json_generated=$DECRYPT_GENERATED" >> $GITHUB_OUTPUT
-          echo "decrypt_failed=$DECRYPT_FAILED" >> $GITHUB_OUTPUT
-          echo "decrypt_success_rate=$SUCCESS_RATE" >> $GITHUB_OUTPUT
-          
-          echo "Metrics extracted:"
-          echo "  Generated: $DECRYPT_GENERATED"
-          echo "  Failed: $DECRYPT_FAILED"
-          echo "  Success Rate: $SUCCESS_RATE"
-          echo "Generated $DECRYPT_GENERATED decrypted JSON files (${DECRYPT_FAILED} failed, ${SUCCESS_RATE} success rate)"
-      
-      - name: Check for changes
-        id: check-changes
-        run: |
-          if [[ -z "$(git status --porcelain)" ]]; then
-              echo "has_changes=false" >> $GITHUB_OUTPUT
-              echo "No changes detected"
-          else
-              echo "has_changes=true" >> $GITHUB_OUTPUT
-              echo "Changes detected:"
-              git status --porcelain
-          fi
-      
-      - name: Create branch and commit changes
-        if: steps.check-changes.outputs.has_changes == 'true'
-        id: create-branch
-        run: |
-          BRANCH_NAME="auto/decrypted-$(date +%Y%m%d-%H%M%S)"
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          
-          git checkout -b "$BRANCH_NAME"
-          git add *-decrypted.json **/*-decrypted.json 2>/dev/null || true
-          
-          ADDED_COUNT=$(git diff --cached --name-only | wc -l)
-          echo "added_count=$ADDED_COUNT" >> $GITHUB_OUTPUT
-          
-          git commit -m "feat: auto-generate decrypted JSON files from RFID dumps
-
-          - Generated ${{ steps.generate-decrypted.outputs.json_generated }} JSON files from decrypted dumps
-          - Used Bambu Lab key derivation and companion key files
-          - Decrypted files enable full filament metadata extraction
-          - Automated via GitHub Actions workflow
-          
-          Generated files: $ADDED_COUNT"
-          
-          git push origin "$BRANCH_NAME"
-      
-      - name: Create Pull Request
-        if: steps.check-changes.outputs.has_changes == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const branchName = "${{ steps.create-branch.outputs.branch_name }}";
-            const jsonGenerated = "${{ steps.generate-decrypted.outputs.json_generated }}";
-            
-            const { data: pullRequest } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `Auto-decrypt and generate ${jsonGenerated} RFID JSON files`,
-              head: branchName,
-              base: 'main',
-              body: `## 🔓 Automated RFID Decryption and JSON Generation\\n\\nDecrypted RFID dumps and generated ${jsonGenerated} comprehensive JSON metadata files.`,
-              draft: false
-            });
-            
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              labels: ['rfid', 'automation', 'decryption']
-            });
 
   summary:
     name: RFID Processing Summary
     runs-on: ubuntu-latest
-    needs: [check-missing-files, generate-json-files, generate-dic-files, generate-decrypted-files]
+    needs: [check-missing-files, generate-all-files]
     if: always()
     
     steps:
@@ -582,37 +455,44 @@ jobs:
           echo "## 🔍 RFID Processing Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # JSON Generation Summary
-          if [ "${{ needs.check-missing-files.outputs.has_missing_json }}" == "true" ]; then
-            echo "### 📋 JSON Files: ${{ needs.check-missing-files.outputs.total_missing_json }} processed" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Generated: ${{ needs.generate-json-files.outputs.generated_count }}" >> $GITHUB_STEP_SUMMARY
-            echo "- ❌ Failed: ${{ needs.generate-json-files.outputs.json_failed }}" >> $GITHUB_STEP_SUMMARY
-            echo "- 📊 Success Rate: ${{ needs.generate-json-files.outputs.json_success_rate }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Status: ${{ needs.generate-json-files.result }}" >> $GITHUB_STEP_SUMMARY
+          # Combined Generation Summary
+          if [ "${{ needs.check-missing-files.outputs.has_missing_json }}" == "true" ] || 
+             [ "${{ needs.check-missing-files.outputs.has_missing_keys }}" == "true" ] ||
+             [ "${{ needs.check-missing-files.outputs.has_missing_decrypted }}" == "true" ]; then
+            
+            echo "### 📋 File Generation Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # JSON Generation Summary
+            if [ "${{ needs.check-missing-files.outputs.has_missing_json }}" == "true" ]; then
+              echo "**JSON Files**: ${{ needs.check-missing-files.outputs.total_missing_json }} processed" >> $GITHUB_STEP_SUMMARY
+              echo "- ✅ Generated: ${{ needs.generate-all-files.outputs.json_generated }}" >> $GITHUB_STEP_SUMMARY
+              echo "- ❌ Failed: ${{ needs.generate-all-files.outputs.json_failed }}" >> $GITHUB_STEP_SUMMARY
+              echo "- 📊 Success Rate: ${{ needs.generate-all-files.outputs.json_success_rate }}" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Dictionary Generation Summary  
+            if [ "${{ needs.check-missing-files.outputs.has_missing_keys }}" == "true" ]; then
+              echo "**Dictionary Files**: ${{ needs.check-missing-files.outputs.total_missing_keys }} processed" >> $GITHUB_STEP_SUMMARY
+              echo "- ✅ Generated: ${{ needs.generate-all-files.outputs.dic_generated }}" >> $GITHUB_STEP_SUMMARY
+              echo "- ❌ Failed: ${{ needs.generate-all-files.outputs.dic_failed }}" >> $GITHUB_STEP_SUMMARY
+              echo "- 📊 Success Rate: ${{ needs.generate-all-files.outputs.dic_success_rate }}" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Decrypted Generation Summary
+            if [ "${{ needs.check-missing-files.outputs.has_missing_decrypted }}" == "true" ]; then
+              echo "**Decrypted Files**: ${{ needs.check-missing-files.outputs.total_missing_decrypted }} processed" >> $GITHUB_STEP_SUMMARY
+              echo "- ✅ Generated: ${{ needs.generate-all-files.outputs.decrypt_generated }}" >> $GITHUB_STEP_SUMMARY
+              echo "- ❌ Failed: ${{ needs.generate-all-files.outputs.decrypt_failed }}" >> $GITHUB_STEP_SUMMARY
+              echo "- 📊 Success Rate: ${{ needs.generate-all-files.outputs.decrypt_success_rate }}" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "**Overall Status**: ${{ needs.generate-all-files.result }}" >> $GITHUB_STEP_SUMMARY
           else
-            echo "### ✅ All JSON Files Up to Date" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Dictionary Generation Summary  
-          if [ "${{ needs.check-missing-files.outputs.has_missing_keys }}" == "true" ]; then
-            echo "### 🔑 Dictionary Files: ${{ needs.check-missing-files.outputs.total_missing_keys }} processed" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Generated: ${{ needs.generate-dic-files.outputs.generated_count }}" >> $GITHUB_STEP_SUMMARY
-            echo "- ❌ Failed: ${{ needs.generate-dic-files.outputs.dic_failed }}" >> $GITHUB_STEP_SUMMARY
-            echo "- 📊 Success Rate: ${{ needs.generate-dic-files.outputs.dic_success_rate }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Status: ${{ needs.generate-dic-files.result }}" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ✅ All Dictionary Files Up to Date" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Decrypted Generation Summary
-          if [ "${{ needs.check-missing-files.outputs.has_missing_decrypted }}" == "true" ]; then
-            echo "### 🔓 Decrypted Files: ${{ needs.check-missing-files.outputs.total_missing_decrypted }} processed" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Generated: ${{ needs.generate-decrypted-files.outputs.json_generated }}" >> $GITHUB_STEP_SUMMARY
-            echo "- ❌ Failed: ${{ needs.generate-decrypted-files.outputs.decrypt_failed }}" >> $GITHUB_STEP_SUMMARY
-            echo "- 📊 Success Rate: ${{ needs.generate-decrypted-files.outputs.decrypt_success_rate }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Status: ${{ needs.generate-decrypted-files.result }}" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ✅ All Decrypted Files Up to Date" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ All RFID Files Up to Date" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
