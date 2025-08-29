@@ -12,7 +12,56 @@ import json
 import glob
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+def extract_sector_keys_from_blocks(blocks: Dict[str, str]) -> Dict[str, Any]:
+    """Extract SectorKeys from sector trailer blocks."""
+    sector_keys = {}
+    
+    # MIFARE Classic 1K has 16 sectors (0-15)
+    for sector in range(16):
+        sector_trailer_block = sector * 4 + 3  # Sector trailer is always the 4th block in each sector
+        
+        if str(sector_trailer_block) not in blocks:
+            continue
+            
+        trailer_hex = blocks[str(sector_trailer_block)]
+        if len(trailer_hex) != 32:  # 16 bytes = 32 hex chars
+            continue
+            
+        # Extract keys and access conditions from sector trailer
+        # Structure: KeyA (6 bytes) + Access (4 bytes) + KeyB (6 bytes) 
+        key_a = trailer_hex[0:12]   # First 6 bytes (12 hex chars)
+        access_conditions = trailer_hex[12:20]  # Next 4 bytes (8 hex chars) 
+        key_b = trailer_hex[20:32]  # Last 6 bytes (12 hex chars)
+        
+        # Generate access conditions text (simplified version)
+        access_text = generate_access_conditions_text(access_conditions, sector)
+        
+        sector_keys[str(sector)] = {
+            "KeyA": key_a,
+            "KeyB": key_b,
+            "AccessConditions": access_conditions,
+            "AccessConditionsText": access_text
+        }
+    
+    return sector_keys
+
+def generate_access_conditions_text(access_conditions: str, sector: int) -> Dict[str, str]:
+    """Generate human-readable access conditions text."""
+    # This is a simplified implementation
+    # Real access conditions parsing is complex, but most Bambu tags use standard conditions
+    
+    base_block = sector * 4
+    user_data = access_conditions[-2:]  # Last byte as user data
+    
+    return {
+        f"block{base_block}": "read AB",
+        f"block{base_block + 1}": "read AB", 
+        f"block{base_block + 2}": "read AB",
+        f"block{base_block + 3}": "read ACCESS by AB; write ACCESS by B",
+        "UserData": user_data
+    }
 
 def bin_to_proxmark3_json(bin_file: str) -> Dict[str, Any]:
     """Convert a binary RFID dump to Proxmark3 JSON format."""
@@ -36,6 +85,9 @@ def bin_to_proxmark3_json(bin_file: str) -> Dict[str, Any]:
             block_data = data[start_pos:end_pos]
             blocks[str(block_num)] = block_data.hex().upper()
         
+        # Extract SectorKeys from the blocks
+        sector_keys = extract_sector_keys_from_blocks(blocks)
+        
         # Standard MIFARE Classic 1K values
         proxmark3_json = {
             "Created": "proxmark3",
@@ -45,7 +97,8 @@ def bin_to_proxmark3_json(bin_file: str) -> Dict[str, Any]:
                 "ATQA": "0400",  # Standard for MIFARE Classic 1K
                 "SAK": "08"      # Standard for MIFARE Classic 1K
             },
-            "blocks": blocks
+            "blocks": blocks,
+            "SectorKeys": sector_keys
         }
         
         return proxmark3_json
