@@ -18,9 +18,24 @@ def extract_sector_keys_from_blocks(blocks: Dict[str, str]) -> Dict[str, Any]:
     """Extract SectorKeys from sector trailer blocks."""
     sector_keys = {}
     
-    # MIFARE Classic 1K has 16 sectors (0-15)
-    for sector in range(16):
-        sector_trailer_block = sector * 4 + 3  # Sector trailer is always the 4th block in each sector
+    # Determine number of sectors based on available blocks
+    max_block = max(int(k) for k in blocks.keys())
+    if max_block >= 127:
+        # MIFARE Classic 4K: 40 sectors (32 small + 8 large)
+        max_sectors = 40
+    elif max_block >= 63:
+        # MIFARE Classic 1K or partial 4K: determine dynamically
+        max_sectors = (max_block + 1) // 4
+    else:
+        max_sectors = 16
+    
+    for sector in range(max_sectors):
+        if sector < 32:
+            # Small sectors (0-31): 4 blocks each, trailer at block 3, 7, 11, etc.
+            sector_trailer_block = sector * 4 + 3
+        else:
+            # Large sectors (32-39): 16 blocks each, trailer at block 128+((sector-32)*16)+15
+            sector_trailer_block = 128 + (sector - 32) * 16 + 15
         
         if str(sector_trailer_block) not in blocks:
             continue
@@ -38,12 +53,13 @@ def extract_sector_keys_from_blocks(blocks: Dict[str, str]) -> Dict[str, Any]:
         # Generate access conditions text (simplified version)
         access_text = generate_access_conditions_text(access_conditions, sector)
         
-        sector_keys[str(sector)] = {
-            "KeyA": key_a,
-            "KeyB": key_b,
-            "AccessConditions": access_conditions,
-            "AccessConditionsText": access_text
-        }
+        from collections import OrderedDict
+        sector_data = OrderedDict()
+        sector_data["KeyA"] = key_a
+        sector_data["KeyB"] = key_b
+        sector_data["AccessConditions"] = access_conditions
+        sector_data["AccessConditionsText"] = access_text
+        sector_keys[str(sector)] = sector_data
     
     return sector_keys
 
@@ -52,16 +68,31 @@ def generate_access_conditions_text(access_conditions: str, sector: int) -> Dict
     # This is a simplified implementation
     # Real access conditions parsing is complex, but most Bambu tags use standard conditions
     
-    base_block = sector * 4
     user_data = access_conditions[-2:]  # Last byte as user data
     
-    return {
-        f"block{base_block}": "read AB",
-        f"block{base_block + 1}": "read AB", 
-        f"block{base_block + 2}": "read AB",
-        f"block{base_block + 3}": "read ACCESS by AB; write ACCESS by B",
-        "UserData": user_data
-    }
+    # Use ordered dict to maintain consistent field ordering - UserData first
+    from collections import OrderedDict
+    result = OrderedDict()
+    result["UserData"] = user_data
+    
+    if sector < 32:
+        # Small sectors (0-31): 4 blocks each
+        base_block = sector * 4
+        for i in range(4):
+            if i == 3:
+                result[f"block{base_block + i}"] = "read ACCESS by AB; write ACCESS by B"
+            else:
+                result[f"block{base_block + i}"] = "read AB"
+    else:
+        # Large sectors (32-39): 16 blocks each
+        base_block = 128 + (sector - 32) * 16
+        for i in range(16):
+            if i == 15:
+                result[f"block{base_block + i}"] = "read ACCESS by AB; write ACCESS by B"
+            else:
+                result[f"block{base_block + i}"] = "read AB"
+    
+    return result
 
 def bin_to_proxmark3_json(bin_file: str) -> Dict[str, Any]:
     """Convert a binary RFID dump to Proxmark3 JSON format."""
@@ -69,17 +100,29 @@ def bin_to_proxmark3_json(bin_file: str) -> Dict[str, Any]:
         with open(bin_file, 'rb') as f:
             data = f.read()
         
-        # Ensure we have the expected 1KB (1024 bytes) for MIFARE Classic 1K
-        if len(data) != 1024:
-            print(f"Warning: {bin_file} has {len(data)} bytes, expected 1024")
+        # Determine card type based on file size
+        if len(data) == 1024:
+            # MIFARE Classic 1K: 64 blocks of 16 bytes
+            expected_blocks = 64
+            card_type = "MIFARE Classic 1K"
+        elif len(data) == 1152:
+            # MIFARE Classic 1K + 2 sectors from 4K: 72 blocks of 16 bytes  
+            expected_blocks = 72
+            card_type = "MIFARE Classic 1K+2sectors"
+        elif len(data) == 4096:
+            # MIFARE Classic 4K: 256 blocks of 16 bytes
+            expected_blocks = 256
+            card_type = "MIFARE Classic 4K"
+        else:
+            print(f"Warning: {bin_file} has {len(data)} bytes, unsupported size")
             return None
         
         # Extract UID from first block (first 4 bytes)
         uid = data[0:4].hex().upper()
         
-        # Create blocks dictionary - 64 blocks of 16 bytes each
+        # Create blocks dictionary
         blocks = {}
-        for block_num in range(64):
+        for block_num in range(expected_blocks):
             start_pos = block_num * 16
             end_pos = start_pos + 16
             block_data = data[start_pos:end_pos]
@@ -88,14 +131,21 @@ def bin_to_proxmark3_json(bin_file: str) -> Dict[str, Any]:
         # Extract SectorKeys from the blocks
         sector_keys = extract_sector_keys_from_blocks(blocks)
         
-        # Standard MIFARE Classic 1K values
+        # MIFARE Classic values based on detected type
+        if card_type.startswith("MIFARE Classic 4K"):
+            atqa = "0200"  # MIFARE Classic 4K ATQA
+            sak = "18"     # MIFARE Classic 4K SAK
+        else:
+            atqa = "0400"  # MIFARE Classic 1K ATQA  
+            sak = "08"     # MIFARE Classic 1K SAK
+        
         proxmark3_json = {
             "Created": "proxmark3",
             "FileType": "mfc v2",
             "Card": {
                 "UID": uid,
-                "ATQA": "0400",  # Standard for MIFARE Classic 1K
-                "SAK": "08"      # Standard for MIFARE Classic 1K
+                "ATQA": atqa,
+                "SAK": sak
             },
             "blocks": blocks,
             "SectorKeys": sector_keys
