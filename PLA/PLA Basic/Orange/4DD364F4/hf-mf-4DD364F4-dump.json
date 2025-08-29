@@ -1,6 +1,6 @@
 {
   "Created": "proxmark3",
-  "FileType": "mfcard",
+  "FileType": "mfc v2",
   "Card": {
     "UID": "4DD364F4",
     "ATQA": "0400",
