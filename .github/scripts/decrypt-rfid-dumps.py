@@ -37,7 +37,7 @@ class RFIDDecryptor:
         self.BYTES_PER_BLOCK = 16
         self.KEY_LENGTH = 6
         
-    def parse_decrypted_data_to_json(self, decrypted_data: bytes, uid: str) -> Optional[Dict[str, Any]]:
+    def parse_decrypted_data_to_json(self, decrypted_data: bytes, uid: str, original_bin_path: str = None) -> Optional[Dict[str, Any]]:
         """Parse decrypted RFID data using parse.py and convert to JSON."""
         try:
             # Create temporary file for decrypted data
@@ -61,7 +61,9 @@ class RFIDDecryptor:
                     return None
                 
                 # Convert YAML-like output to JSON using the same logic as local-json-generator.py
-                json_data = self.yaml_to_json(yaml_output, temp_path)
+                # Use original bin path if provided, otherwise use temp path
+                path_for_filename = original_bin_path if original_bin_path else temp_path
+                json_data = self.yaml_to_json(yaml_output, path_for_filename)
                 return json_data
                 
             finally:
@@ -326,7 +328,7 @@ class RFIDDecryptor:
                 return False
             
             # Parse decrypted data to JSON
-            json_data = self.parse_decrypted_data_to_json(decrypted_data, uid_hex)
+            json_data = self.parse_decrypted_data_to_json(decrypted_data, uid_hex, dump_path)
             if not json_data:
                 print(f"  Could not parse decrypted data to JSON")
                 return False
